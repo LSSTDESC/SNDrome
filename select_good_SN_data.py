@@ -8,10 +8,13 @@ Gautham Narayan
 import sys
 import os
 import glob
+import shutil
+import numpy as np
 import sncosmo
 import gzip
 from io import StringIO
 from contextlib import contextmanager
+from collections import Counter
 
 def get_files_from_lcmerge_dir(data_dir):
     '''
@@ -59,6 +62,9 @@ def main():
     data_dirs = glob.glob(os.path.join(lcmerge, '*'))
     use_surveys = ['CSPDR3', 'DES-SN5YR', 'CFA3_KEPLERCAM', 'CFA4', 'Pantheon+', 'SNLS3year', 'SDSS_HOLTZ08']
 
+    outdir = os.path.join(os.getcwd(), 'training_set')
+    plotdir = os.path.join(outdir, 'plots')
+    os.makedirs(plotdir, exist_ok=True)
 
     for data_dir in data_dirs:
         survey_dir = os.path.basename(data_dir)
@@ -80,19 +86,58 @@ def main():
                     print(f"IOError ${lcfile}")
                     continue
                 else:
-                    print(lc_file)
                     lc_raw = fh.read().decode("utf-8")
                     lc_fh  = StringIO(lc_raw)
-                    meta, lc_dat
-                    a = sncosmo.read_snana_ascii(lc_fh, default_tablename='OBS')
+                    meta, lc_data = sncosmo.read_snana_ascii(lc_fh, default_tablename='OBS')
 
                     # give up if we don't load any data
                     if not 'OBS' in lc_data.keys():
                         continue
 
-                    print(lc_data['OBS'])
+                    # give up if there is nothing like a PEAKMJD guess
+                    # this may cost some good data, but more likely SN without this
+                    # don't have good phase coverage around peak
+                    if (not ('PEAKMJD' in meta)) and (not ('SEARCH_PEAKMJD' in meta)):
+                        continue
 
+                    flt = lc_data['OBS']['FLT']
+                    flt_counts = Counter(flt)
 
+                    # quality cuts
+                    # demand at least 30 points on the light curve
+                    if flt_counts.total() < 30:
+                        continue
+                    # demand at least three filters
+                    if len(list(flt_counts)) < 3:
+                        continue
+
+                    # require at least 15 points with SNR > 5 (any filter)
+                    fluxcal = lc_data['OBS']['FLUXCAL']
+                    fluxcalerr  = lc_data['OBS']['FLUXCALERR']
+                    snr = fluxcal/fluxcalerr
+                    if np.count_nonzero(snr > 5) < 15:
+                        continue
+
+                    # require 5 points before peak (any filter) and 10 after (any filter)
+                    peakmjd = meta.get('PEAKMJD', meta.get('SEARCH_PEAKMJD'))
+                    mjd = lc_data['OBS']['MJD']
+                    if np.count_nonzero(mjd <= peakmjd) < 5:
+                        continue
+                    if np.count_nonzero(mjd > peakmjd) < 10:
+                        continue
+
+                    #plottable = lc_data['OBS'].copy()
+                    #plottable['zpt'] = np.repeat(27.5, len(plottable))
+                    #plottable['zpsys'] = np.repeat('fake', len(plottable))
+                    #plottable.rename_column('FLUXCAL', 'flux')
+                    #plottable.rename_column('FLUXCALERR', 'fluxerr')
+                    #basefile = os.path.basename(lc_file)
+                    #outfile = os.path.join(outdir, basefile)
+                    #shutil.copyfile(lc_file, outfile)
+                    #plotfile = os.path.join(plotdir, basefile.rstrip('.gz')+'.pdf')
+                    #sncosmo.plot_lc(plottable, fname=plotfile, format='pdf')
+
+                    print(os.path.basename(lc_file), flt_counts)
 
 
 
